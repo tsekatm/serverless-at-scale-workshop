@@ -1,0 +1,310 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Serverless Systems at Scale workshop - supplier risk monitoring.
+  EventBridge -> Step Functions (fan-out to 3 checks, fan-in to a risk score)
+  -> DynamoDB + SNS -> SQS (with DLQ) -> notifier Lambda.
+
+Parameters:
+  PowertoolsLayerArn:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /aws/service/powertools/python/arm64/python3.13/latest
+    Description: Public SSM parameter that holds the latest Powertools for AWS Lambda layer ARN
+  EnableSnapStart:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: Deploy the SnapStart cold-start function (presenter demo only - SnapStart has extra charges)
+
+Conditions:
+  SnapStartEnabled: !Equals [!Ref EnableSnapStart, "true"]
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]
+    MemorySize: 256
+    Timeout: 5
+    CodeUri: src/
+    Environment:
+      Variables:
+        POWERTOOLS_SERVICE_NAME: supplier-risk
+        POWERTOOLS_LOG_LEVEL: INFO
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # 1. FAN-OUT checks (Step Functions runs these in parallel)
+  # ---------------------------------------------------------------------------
+  SanctionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: checks.sanctions_handler
+      Layers: [!Ref PowertoolsLayerArn]
+
+  CreditFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: checks.credit_handler
+      Layers: [!Ref PowertoolsLayerArn]
+
+  NewsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: checks.news_handler
+      Layers: [!Ref PowertoolsLayerArn]
+
+  # ---------------------------------------------------------------------------
+  # 2. FAN-IN + IDEMPOTENCY: risk score
+  # ---------------------------------------------------------------------------
+  RiskScoreFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: risk_score.handler
+      Timeout: 10
+      Layers: [!Ref PowertoolsLayerArn]
+      Environment:
+        Variables:
+          SCORES_TABLE: !Ref ScoresTable
+          IDEMPOTENCY_TABLE: !Ref IdempotencyTable
+          ALERTS_TOPIC_ARN: !Ref AlertsTopic
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref ScoresTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref IdempotencyTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt AlertsTopic.TopicName
+
+  ScoresTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: score_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: score_id
+          KeyType: HASH
+
+  IdempotencyTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiration
+        Enabled: true
+
+  # ---------------------------------------------------------------------------
+  # 3. Orchestration: EventBridge rule -> Step Functions
+  # ---------------------------------------------------------------------------
+  SupplierRiskStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/supplier_risk.asl.json
+      DefinitionSubstitutions:
+        SanctionsFunctionArn: !GetAtt SanctionsFunction.Arn
+        CreditFunctionArn: !GetAtt CreditFunction.Arn
+        NewsFunctionArn: !GetAtt NewsFunction.Arn
+        RiskScoreFunctionArn: !GetAtt RiskScoreFunction.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref SanctionsFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CreditFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref NewsFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref RiskScoreFunction
+      Events:
+        SupplierRiskCheckRequested:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source: [workshop.suppliers]
+              detail-type: [SupplierRiskCheckRequested]
+
+  # ---------------------------------------------------------------------------
+  # 4. FAILURE HANDLING: SNS -> SQS (+ dead-letter queue) -> notifier
+  # ---------------------------------------------------------------------------
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      KmsMasterKeyId: alias/aws/sns
+
+  AlertsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      SqsManagedSseEnabled: true
+      # Short on purpose so a failing message is retried quickly in the workshop.
+      # Production guidance: at least 6x the function timeout.
+      VisibilityTimeout: 10
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AlertsDeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  AlertsDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      SqsManagedSseEnabled: true
+      MessageRetentionPeriod: 1209600
+
+  AlertsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref AlertsQueue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAlertsTopicOnly
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt AlertsQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref AlertsTopic
+
+  AlertsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: sqs
+      Endpoint: !GetAtt AlertsQueue.Arn
+      RawMessageDelivery: true
+
+  NotifierFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: notifier.handler
+      Layers: [!Ref PowertoolsLayerArn]
+      Events:
+        Alerts:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt AlertsQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes: [ReportBatchItemFailures]
+
+  # ---------------------------------------------------------------------------
+  # 5. COLD START LAB: same code - change ONE thing at a time
+  #    X86Mem512 -> ArmMem512   : architecture only
+  #    ArmMem512 -> ArmMem1024  : memory only
+  #    ArmMem1024 -> SnapStart  : SnapStart only (presenter demo)
+  # ---------------------------------------------------------------------------
+  ColdStartX86Mem512:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: coldstart.handler
+      Architectures: [x86_64]
+      MemorySize: 512
+      Timeout: 15
+
+  ColdStartArmMem512:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: coldstart.handler
+      Architectures: [arm64]
+      MemorySize: 512
+      Timeout: 15
+
+  ColdStartArmMem1024:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: coldstart.handler
+      Architectures: [arm64]
+      MemorySize: 1024
+      Timeout: 15
+
+  ColdStartSnapStart:
+    Type: AWS::Serverless::Function
+    Condition: SnapStartEnabled
+    Properties:
+      Handler: coldstart.handler
+      Architectures: [arm64]
+      MemorySize: 1024
+      Timeout: 15
+      AutoPublishAlias: live
+      SnapStart:
+        ApplyOn: PublishedVersions
+
+  # Log groups with 7-day retention so `sam delete` cleans everything up
+  SanctionsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${SanctionsFunction}
+      RetentionInDays: 7
+  CreditLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${CreditFunction}
+      RetentionInDays: 7
+  NewsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${NewsFunction}
+      RetentionInDays: 7
+  RiskScoreLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${RiskScoreFunction}
+      RetentionInDays: 7
+  NotifierLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${NotifierFunction}
+      RetentionInDays: 7
+  ColdStartX86Mem512LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ColdStartX86Mem512}
+      RetentionInDays: 7
+  ColdStartArmMem512LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ColdStartArmMem512}
+      RetentionInDays: 7
+  ColdStartArmMem1024LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ColdStartArmMem1024}
+      RetentionInDays: 7
+  ColdStartSnapStartLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: SnapStartEnabled
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ColdStartSnapStart}
+      RetentionInDays: 7
+
+Outputs:
+  StateMachineArn:
+    Value: !Ref SupplierRiskStateMachine
+  ScoresTableName:
+    Value: !Ref ScoresTable
+  IdempotencyTableName:
+    Value: !Ref IdempotencyTable
+  AlertsTopicArn:
+    Value: !Ref AlertsTopic
+  AlertsQueueUrl:
+    Value: !Ref AlertsQueue
+  AlertsDeadLetterQueueUrl:
+    Value: !Ref AlertsDeadLetterQueue
+  AlertsDeadLetterQueueArn:
+    Value: !GetAtt AlertsDeadLetterQueue.Arn
+  NotifierFunctionName:
+    Value: !Ref NotifierFunction
+  ColdStartX86Mem512Name:
+    Value: !Ref ColdStartX86Mem512
+  ColdStartArmMem512Name:
+    Value: !Ref ColdStartArmMem512
+  ColdStartArmMem1024Name:
+    Value: !Ref ColdStartArmMem1024
+  ColdStartSnapStartName:
+    Condition: SnapStartEnabled
+    Value: !Ref ColdStartSnapStart

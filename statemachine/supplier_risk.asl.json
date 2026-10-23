@@ -1,0 +1,54 @@
+{
+  "Comment": "Supplier risk check: FAN-OUT to three checks in parallel, then FAN-IN to one risk score",
+  "StartAt": "RunChecksInParallel",
+  "States": {
+    "RunChecksInParallel": {
+      "Type": "Parallel",
+      "Comment": "FAN-OUT: all three branches start at the same time",
+      "Branches": [
+        {
+          "StartAt": "SanctionsCheck",
+          "States": {
+            "SanctionsCheck": {
+              "Type": "Task",
+              "Resource": "${SanctionsFunctionArn}",
+              "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException", "Lambda.SdkClientException"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2}],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "CreditCheck",
+          "States": {
+            "CreditCheck": {
+              "Type": "Task",
+              "Resource": "${CreditFunctionArn}",
+              "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException", "Lambda.SdkClientException"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2}],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "NewsCheck",
+          "States": {
+            "NewsCheck": {
+              "Type": "Task",
+              "Resource": "${NewsFunctionArn}",
+              "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException", "Lambda.SdkClientException"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2}],
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.checks",
+      "Next": "CalculateRiskScore"
+    },
+    "CalculateRiskScore": {
+      "Type": "Task",
+      "Comment": "FAN-IN: waits for all three results, then scores the supplier",
+      "Resource": "${RiskScoreFunctionArn}",
+      "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException", "Lambda.SdkClientException"], "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2}],
+      "End": true
+    }
+  }
+}

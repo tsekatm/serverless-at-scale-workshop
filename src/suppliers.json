@@ -1,0 +1,147 @@
+{
+  "_note": "All suppliers, findings and figures below are FICTIONAL, made up for this workshop.",
+  "suppliers": [
+    {
+      "supplier_id": "SUP001",
+      "name": "Ubuntu Foods (Pty) Ltd",
+      "category": "Packaged food",
+      "province": "Gauteng",
+      "key_countries": ["South Africa"],
+      "criticality": "High",
+      "open_po_value_zar": 41250000,
+      "next_po_due": "2026-11-03",
+      "sanctions": {"status": "clear", "detail": "No watchlist matches"},
+      "credit": {"rating": "A", "detail": "Strong balance sheet, pays on time"},
+      "news": []
+    },
+    {
+      "supplier_id": "SUP002",
+      "name": "Karoo Packaging Co",
+      "category": "Packaging",
+      "province": "Western Cape",
+      "key_countries": ["South Africa"],
+      "criticality": "High",
+      "open_po_value_zar": 18900000,
+      "next_po_due": "2026-10-29",
+      "sanctions": {"status": "clear", "detail": "No watchlist matches"},
+      "credit": {"rating": "D", "detail": "Missed two loan repayments this quarter"},
+      "news": [
+        {"headline": "Karoo Packaging enters business rescue talks", "risk_type": "financial_distress", "severity": "high"}
+      ]
+    },
+    {
+      "supplier_id": "SUP003",
+      "name": "Table Bay Logistics",
+      "category": "Logistics",
+      "province": "Western Cape",
+      "key_countries": ["South Africa", "Namibia"],
+      "criticality": "Medium",
+      "open_po_value_zar": 7300000,
+      "next_po_due": "2026-11-12",
+      "sanctions": {"status": "clear", "detail": "No watchlist matches"},
+      "credit": {"rating": "B", "detail": "Stable"},
+      "news": [
+        {"headline": "Strong winds close container terminal for 48 hours", "risk_type": "operational_disruption", "severity": "medium"}
+      ]
+    },
+    {
+      "supplier_id": "SUP004",
+      "name": "Highveld Electronics",
+      "category": "Consumer electronics",
+      "province": "Gauteng",
+      "key_countries": ["South Africa", "Vietnam"],
+      "criticality": "High",
+      "open_po_value_zar": 52600000,
+      "next_po_due": "2026-10-31",
+      "sanctions": {"status": "potential_match", "detail": "Parent company name partially matches a watchlist entry"},
+      "credit": {"rating": "C", "detail": "Rising debt levels"},
+      "news": [
+        {"headline": "Labour strike halts assembly plant in Vietnam", "risk_type": "labour", "severity": "high"}
+      ]
+    },
+    {
+      "supplier_id": "SUP005",
+      "name": "Drakensberg Apparel",
+      "category": "Apparel",
+      "province": "KwaZulu-Natal",
+      "key_countries": ["South Africa", "Lesotho"],
+      "criticality": "Medium",
+      "open_po_value_zar": 9800000,
+      "next_po_due": "2026-11-20",
+      "sanctions": {"status": "clear", "detail": "No watchlist matches"},
+      "credit": {"rating": "B", "detail": "Stable"},
+      "news": [
+        {"headline": "Wage talks stall at textile factory", "risk_type": "labour", "severity": "low"}
+      ]
+    },
+    {
+      "supplier_id": "SUP006",
+      "name": "Limpopo Fresh Produce",
+      "category": "Fresh produce",
+      "province": "Limpopo",
+      "key_countries": ["South Africa"],
+      "criticality": "High",
+      "open_po_value_zar": 12400000,
+      "next_po_due": "2026-10-27",
+      "sanctions": {"status": "clear", "detail": "No watchlist matches"},
+      "credit": {"rating": "A", "detail": "Strong"},
+      "news": []
+    },
+    {
+      "supplier_id": "SUP007",
+      "name": "Cape Point Payments",
+      "category": "Payments technology",
+      "province": "Western Cape",
+      "key_countries": ["South Africa", "Ireland"],
+      "criticality": "High",
+      "open_po_value_zar": 6100000,
+      "next_po_due": "2026-11-30",
+      "sanctions": {"status": "clear", "detail": "No watchlist matches"},
+      "credit": {"rating": "B", "detail": "Stable"},
+      "news": [
+        {"headline": "Payments provider investigates ransomware attack", "risk_type": "cyber", "severity": "high"}
+      ]
+    },
+    {
+      "supplier_id": "SUP008",
+      "name": "Savanna Cleaning Supplies",
+      "category": "Home care",
+      "province": "Free State",
+      "key_countries": ["South Africa"],
+      "criticality": "Low",
+      "open_po_value_zar": 2200000,
+      "next_po_due": "2026-12-04",
+      "sanctions": {"status": "clear", "detail": "No watchlist matches"},
+      "credit": {"rating": "C", "detail": "Thin margins"},
+      "news": []
+    },
+    {
+      "supplier_id": "SUP009",
+      "name": "Garden Route Timber",
+      "category": "Timber and furniture",
+      "province": "Western Cape",
+      "key_countries": ["South Africa"],
+      "criticality": "Low",
+      "open_po_value_zar": 3400000,
+      "next_po_due": "2026-11-15",
+      "sanctions": {"status": "clear", "detail": "No watchlist matches"},
+      "credit": {"rating": "B", "detail": "Stable"},
+      "news": [
+        {"headline": "Veld fires threaten plantations near Knysna", "risk_type": "natural_disaster", "severity": "medium"}
+      ]
+    },
+    {
+      "supplier_id": "SUP010",
+      "name": "Northstar Trading LLC",
+      "category": "Imported components",
+      "province": "",
+      "key_countries": ["United Arab Emirates"],
+      "criticality": "Medium",
+      "open_po_value_zar": 15700000,
+      "next_po_due": "2026-11-08",
+      "sanctions": {"status": "confirmed_match", "detail": "Exact match on a sanctions watchlist"},
+      "credit": {"rating": "C", "detail": "Limited financial disclosure"},
+      "news": []
+    }
+  ]
+}

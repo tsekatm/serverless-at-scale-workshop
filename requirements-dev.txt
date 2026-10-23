@@ -1,0 +1,4 @@
+aws-lambda-powertools>=3.20
+boto3
+moto[dynamodb,sns,sqs]>=5
+pytest
