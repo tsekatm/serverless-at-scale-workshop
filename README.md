@@ -217,7 +217,7 @@ Wait ~20 seconds:
 sam logs --stack-name supplier-risk --region eu-west-1 -n NotifierFunction -s '5mins ago' | grep ALERT
 ```
 
-✅ **Checkpoint:** the DLQ is empty and you see `ALERT [MEDIUM] Karoo Packaging Co (SUP002) scored 47`.
+✅ **Checkpoint:** the DLQ is empty and you see `ALERT [LOW] Garden Route Timber (SUP009) scored 21`: the legacy message that failed earlier.
 
 You can also do the redrive in the console: **SQS** → `supplier-risk-AlertsDeadLetterQueue-…` → **Start DLQ redrive**.
 
