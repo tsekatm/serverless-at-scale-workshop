@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Reads Lambda REPORT log lines with CloudWatch Logs Insights and compares
 # cold starts, durations and cost per 1 million invocations.
+# Usage: coldstart_report.sh --since <epoch seconds>   (printed by coldstart_burst.sh)
+#        coldstart_report.sh [minutes]                 (default: the last 60 minutes)
 source "$(dirname "$0")/_common.sh"
-MINUTES="${1:-60}"
+if [[ "${1:-}" == "--since" ]]; then
+  START="$2"
+else
+  START=$(( $(date +%s) - ${1:-60} * 60 ))
+fi
 
 groups=()
 for fn in $(coldstart_functions); do groups+=("/aws/lambda/$fn"); done
@@ -15,14 +21,21 @@ QUERY='filter @type = "REPORT"
         avg(@billedDuration) as avg_billed_ms, max(@memorySize) as memory_bytes by @log'
 
 QUERY_ID=$(aws logs start-query --log-group-names "${groups[@]}" \
-  --start-time $(( $(date +%s) - MINUTES * 60 )) --end-time "$(date +%s)" \
+  --start-time "$START" --end-time "$(date +%s)" \
   --query-string "$QUERY" --query queryId --output text)
 
-while true; do
+for _ in $(seq 1 60); do
   STATUS=$(aws logs get-query-results --query-id "$QUERY_ID" --query status --output text)
-  [[ "$STATUS" == "Complete" ]] && break
-  sleep 1
+  case "$STATUS" in
+    Complete) break ;;
+    Scheduled|Running) sleep 1 ;;
+    *) echo "Logs Insights query $STATUS - run the report again" >&2; exit 1 ;;
+  esac
 done
+if [[ "$STATUS" != "Complete" ]]; then
+  echo "Logs Insights query still $STATUS after 60 seconds - run the report again" >&2
+  exit 1
+fi
 
 # Lambda prices in eu-west-1 (USD): per GB-second, plus $0.20 per 1M requests
 X86_GBS=0.0000166667

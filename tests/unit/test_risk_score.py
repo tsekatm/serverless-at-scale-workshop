@@ -103,3 +103,23 @@ def test_new_request_id_creates_new_score(aws, lambda_context):
     aws["module"].handler(score_input(request_id="req-b"), lambda_context)
 
     assert aws["ddb"].scan(TableName="scores")["Count"] == 2
+
+
+def test_retry_after_publish_failure_keeps_one_score(aws, lambda_context, monkeypatch):
+    module = aws["module"]
+    real_publish = module.sns.publish
+    calls = {"n": 0}
+
+    def flaky_publish(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("SNS unavailable")
+        return real_publish(**kwargs)
+
+    monkeypatch.setattr(module.sns, "publish", flaky_publish)
+    with pytest.raises(RuntimeError):
+        module.handler(score_input(request_id="req-retry"), lambda_context)
+    result = module.handler(score_input(request_id="req-retry"), lambda_context)
+
+    assert result["score_id"] == "SUP004#req-retry"
+    assert aws["ddb"].scan(TableName="scores")["Count"] == 1

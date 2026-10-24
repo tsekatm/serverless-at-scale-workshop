@@ -4,10 +4,14 @@ Events can be delivered more than once ("at least once" delivery). The
 @idempotent decorator remembers each (supplier_id, request_id) pair in DynamoDB,
 so a repeated request returns the saved result instead of creating a second
 score and a second alert.
+
+The score's key is built from the same pair, so if publishing fails and the
+request is retried, the retry overwrites the same row instead of adding one.
+Saving and publishing are still two separate steps: a retry can publish the
+alert twice. In production you would use an outbox pattern for that.
 """
 import json
 import os
-import uuid
 from datetime import datetime, timezone
 
 import boto3
@@ -37,13 +41,14 @@ config = IdempotencyConfig(
 @idempotent(persistence_store=persistence, config=config)
 def handler(event, context):
     supplier = get_supplier(event["detail"]["supplier_id"])
+    request_id = event["detail"]["request_id"]
     risk_score, risk_level = combine(event["checks"])
 
     score = {
-        "score_id": str(uuid.uuid4()),
+        "score_id": f"{supplier['supplier_id']}#{request_id}",
         "supplier_id": supplier["supplier_id"],
         "supplier_name": supplier["name"],
-        "request_id": event["detail"]["request_id"],
+        "request_id": request_id,
         "risk_score": risk_score,
         "risk_level": risk_level,
         "open_po_value_zar": supplier["open_po_value_zar"],

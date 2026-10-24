@@ -2,17 +2,23 @@
 
 **AWS SBG UB · Pre-Event Session 2 · 24 October 2026**
 
-You will deploy a small **supplier risk monitoring** system on AWS and use it to see four production patterns working for real:
+You will deploy a small **supplier risk monitoring** system on AWS and use it to see four patterns that serverless systems at scale rely on. (This is a patterns lab, not a load test: it doesn't measure throughput, backpressure or service quotas.)
 
 | Module | Pattern | You will see |
 |---|---|---|
 | 1 | **Fan-out / fan-in** | One event starts three checks *in parallel*, then their results are combined into one risk score |
-| 2 | **Idempotency** | The same event sent twice creates only **one** score |
+| 2 | **Idempotency** | The same request sent twice creates only **one** score |
 | 3 | **Failure handling** | A bad message is retried, parked in a **dead-letter queue (DLQ)**, then replayed after a fix |
-| 4 | **Cold starts & cost** | How architecture (x86 vs arm64) and memory change start-up time and cost |
+| 4 | **Cold starts & cost** (optional) | How architecture (x86 vs arm64) and memory change start-up time and cost |
 
-> **Time:** about 45 minutes. **Cost:** within the AWS Free Tier if you run the cleanup at the end.
+> **Time:** about 45 minutes. **Cost:** designed for very low usage, but charges depend on your account and what you run. Cleanup stops new charges; it doesn't undo charges already incurred.
 > **Level:** beginner. You only copy and paste commands — no code editor or local installs needed.
+
+### Before you start
+
+- **Your own AWS account, one participant per account.** Everyone deploys a stack called `supplier-risk`, and the event rule listens to every event from `workshop.suppliers` in the account, so two people sharing an account would process each other's events.
+- **Permission to deploy.** Your user or role must be able to create CloudFormation stacks, Lambda functions, Step Functions, DynamoDB tables, SNS topics, SQS queues, EventBridge rules and an S3 bucket, and to **create IAM roles and pass them** to Lambda and Step Functions (`iam:CreateRole`, `iam:PassRole`). An administrator in your own account has all of this; a restricted university or company account may not.
+- A browser. Everything runs in AWS CloudShell.
 
 ---
 
@@ -40,6 +46,7 @@ flowchart LR
 - **Lambda** functions do the work. The checks are mocked, so you don't need API keys.
 - **DynamoDB** stores the scores, plus a record of requests already handled (for **idempotency**).
 - **SNS → SQS** delivers alerts. Messages that keep failing go to the **dead-letter queue**.
+- The **notifier** writes the alert to its log. A real system would send an email or a Teams message from here.
 
 > All suppliers and findings in this workshop are **fictional**.
 
@@ -54,7 +61,7 @@ flowchart LR
 
 ### 0.2 Create a budget alarm (do this first!)
 
-**Why:** a budget alarm emails you if anything starts costing money, so you never get a surprise bill.
+**Why:** a budget alarm emails you when spending crosses a threshold. Billing data is updated a few times a day, so the email can arrive after the money is spent: it's an early warning, not a hard limit.
 
 1. Search for **Billing and Cost Management** → **Budgets** → **Create budget**.
 2. Choose **Use a template** → **Zero spend budget** (or a **Monthly cost budget** of **$5**).
@@ -114,7 +121,7 @@ You will see `SanctionsCheck`, `CreditCheck` and `NewsCheck` run **side by side*
 
 **Try it:** check more suppliers (`SUP001` … `SUP010`) and compare the scores. Look in `src/suppliers.json` to see why each one scored the way it did.
 
-> 💡 **Why fan-out?** The three checks don't depend on each other. Running them in parallel means the total time is the *slowest* check, not the *sum* of all three. If one check fails, Step Functions retries just that one.
+> 💡 **Why fan-out?** The three checks don't depend on each other. Running them in parallel means the total time is the *slowest* check, not the *sum* of all three. If a check hits a temporary Lambda service error (for example throttling), Step Functions retries just that one. Other errors are not retried: the execution fails so you can see why.
 
 ---
 
@@ -146,6 +153,9 @@ Open `src/risk_score.py`. The `@idempotent` decorator (from [Powertools for AWS 
 
 - **First time:** runs the function, saves the result.
 - **Same key again:** skips the work and returns the saved result. No second score, no second alert.
+- **Same key while the first is still running:** the second call gets `IdempotencyAlreadyInProgressError`. Step Functions retries it a few seconds later, and then it gets the saved result.
+
+> ⚠️ **Where the guarantee stops.** Saving the score and publishing the alert are two separate steps. If publishing fails, the request runs again. The score's key is built from `supplier_id#request_id`, so the retry overwrites the same row, but the alert could be published twice. Production systems close that gap with a pattern such as a **transactional outbox**.
 
 See the records yourself: **DynamoDB** → **Tables** → `supplier-risk-IdempotencyTable-…` → **Explore table items**.
 
@@ -164,7 +174,7 @@ Another (older) system still sends alerts in a **legacy format** (`supplierId` i
 ./scripts/queue_status.sh
 ```
 
-The notifier fails → SQS retries the message → after **3 failed attempts** it is moved to the **dead-letter queue**. Wait ~45 seconds and check again:
+The notifier fails → SQS makes the message visible again after **10 seconds** (the visibility timeout) and retries it → after **3 failed attempts** it is moved to the **dead-letter queue**. This usually takes about 45 seconds, but it can take longer, so keep checking until you reach the checkpoint:
 
 ```bash
 ./scripts/queue_status.sh
@@ -173,6 +183,8 @@ The notifier fails → SQS retries the message → after **3 failed attempts** i
 ✅ **Checkpoint:** `Dead-letter queue : 1 waiting`.
 
 > 💡 **Why a DLQ?** Without one, a "poison" message would be retried forever, wasting money and blocking other messages. The DLQ parks it safely so you can investigate. Note that only the bad message failed: the notifier reports *partial batch failures*, so good messages in the same batch still succeed.
+>
+> ⚠️ The 10-second visibility timeout is a **lab shortcut** so you don't wait long. For production, AWS recommends at least **6 × the function timeout**.
 
 ### 3.2 Find the cause
 
@@ -241,11 +253,13 @@ The stack has the same function deployed three ways, changing **one thing at a t
 ./scripts/coldstart_burst.sh
 ```
 
-This calls each function 10 times **at once** (forcing 10 cold starts) and then 10 times one after another (warm). Wait ~30 seconds, then:
+This **generates a burst**: it calls each function 10 times at once, then 10 times one after another. Lambda decides which calls get a new environment, so it can't guarantee 10 cold starts. The report **measures** how many there actually were (the **cold** column). Wait ~30 seconds, then run the command the script prints at the end:
 
 ```bash
-./scripts/coldstart_report.sh
+./scripts/coldstart_report.sh --since <number printed by the burst>
 ```
+
+`--since` makes the report count only this run, so earlier runs don't mix into your results.
 
 ### 4.2 Read the results
 
@@ -268,7 +282,7 @@ This calls each function 10 times **at once** (forcing 10 cold starts) and then 
 sam delete --stack-name supplier-risk --region eu-west-1 --no-prompts
 ```
 
-✅ **Checkpoint:** in **CloudFormation**, the `supplier-risk` stack is gone.
+✅ **Checkpoint:** in **CloudFormation**, the `supplier-risk` stack is gone. Deleting it stops new charges; check **Billing** over the next day for anything already incurred.
 
 Optional: SAM also created a small stack named `aws-sam-cli-managed-default` that holds an S3 bucket for uploads. It costs almost nothing, but you can empty the bucket and delete that stack too.
 
