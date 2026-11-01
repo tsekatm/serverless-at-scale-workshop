@@ -46,7 +46,7 @@ flowchart LR
 - **Lambda** functions do the work. The checks are mocked, so you don't need API keys.
 - **DynamoDB** stores the scores, plus a record of requests already handled (for **idempotency**).
 - **SNS → SQS** delivers alerts. Messages that keep failing go to the **dead-letter queue**.
-- The **notifier** writes the alert to its log. A real system would send an email or a Teams message from here.
+- The **notifier** writes the alert to its log. A real system would send an email or a chat message from here.
 
 > All suppliers and findings in this workshop are **fictional**.
 
